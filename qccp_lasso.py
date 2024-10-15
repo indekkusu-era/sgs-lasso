@@ -1,8 +1,11 @@
 import numpy as np
 from sklearn.datasets import make_spd_matrix
+from tqdm import tqdm
 
-def make_sample_dataset(n):
+def make_sample_dataset(n, cond=2):
     Q = make_spd_matrix(n)
+    maxeig = np.linalg.eigvalsh(Q)[-1]
+    Q = (Q + (1 / (cond - 1)) * maxeig * np.identity(n)) / maxeig
     c = np.random.uniform(-10, 10, size=n)
     lam = np.exp(np.random.uniform(-2, 2))
     return Q, c, lam
@@ -39,9 +42,10 @@ def solve_diagonal(resid, lam, d):
         return (resid + lam) / d
     return 0
 
-def iter_qccp_lasso(x, Q, c, lam):
+def iter_qccp_lasso(x, Q, c, lam, L=None, dia=None):
     n = len(c)
-    L, dia = sgs_decompose(Q)
+    if L is None and dia is None:
+        L, dia = sgs_decompose(Q)
     xhalf = c - L.T @ x + dia * x
     for i in range(n):
         # solve for diagonal
@@ -56,3 +60,27 @@ def iter_qccp_lasso(x, Q, c, lam):
             continue
         xfull[:i] -= Q[:i, i] * xfull[i]
     return xfull
+
+def sgs_lasso(x0, Q, c, lam, maxiter=100, tol=1e-6):
+    tk, tk1 = 1, 0
+    x = x0.copy()
+    x_prev = x
+    L, dia = sgs_decompose(Q)
+    normc = np.linalg.norm(c)
+    for i in (pbar := tqdm(range(maxiter))):
+        # ng = [] 
+        dx = iter_qccp_lasso(x, Q, c, lam, L, dia) - x
+        grad = subgrad_lasso(x, Q, c, lam)
+        if np.dot(x + dx - x_prev, grad) >= 0 or i % 1000 == 0:
+            tk, tk1 = 1, 0
+        normgrad = np.linalg.norm(grad)
+        relnorm = normgrad / normc
+        pbar.set_description(f'relative norm: {relnorm:.6f} | tk: {tk:.3f}')
+        if relnorm < tol: 
+            break
+
+        alpha = armijo_ls(x, dx, grad, Q, c, lam)
+        tk, tk1 = (1 + np.sqrt(1 + 4 * tk ** 2)) / 2, tk
+        x += alpha * dx
+        x, x_prev = x + ((tk1 - 1) / tk) * (x - x_prev), x
+    return x
