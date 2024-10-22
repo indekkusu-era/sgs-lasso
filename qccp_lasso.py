@@ -61,26 +61,34 @@ def iter_qccp_lasso(x, Q, c, lam, L=None, dia=None):
         xfull[:i] -= Q[:i, i] * xfull[i]
     return xfull
 
-def sgs_lasso(x0, Q, c, lam, maxiter=100, tol=1e-6):
+def sgs_lasso(x0, Q, c, lam, maxiter=100, tol=1e-6, verbose=False, debug=False):
     tk, tk1 = 1, 0
     x = x0.copy()
     x_prev = x
     L, dia = sgs_decompose(Q)
     normc = np.linalg.norm(c)
-    for i in (pbar := tqdm(range(maxiter))):
+    k = 20
+    last_iter = -1
+    normgrads = []
+    for i in ((pbar := tqdm(range(maxiter))) if verbose else range(maxiter)):
         # ng = [] 
         dx = iter_qccp_lasso(x, Q, c, lam, L, dia) - x
         grad = subgrad_lasso(x, Q, c, lam)
-        if np.dot(x + dx - x_prev, grad) >= 0 or i % 1000 == 0:
+        alpha = armijo_ls(x, dx, grad, Q, c, lam)
+        if np.dot(x + alpha * dx - x_prev, grad) >= 0 or (i - last_iter) == k:
             tk, tk1 = 1, 0
+            last_iter = i
+            k *= 2
         normgrad = np.linalg.norm(grad)
         relnorm = normgrad / normc
-        pbar.set_description(f'relative norm: {relnorm:.6f} | tk: {tk:.3f}')
+        normgrads.append(relnorm)
+        if verbose:
+            pbar.set_description(f'relative norm: {relnorm:.6f} | tk: {tk:.3f}')
         if relnorm < tol: 
             break
-
-        alpha = armijo_ls(x, dx, grad, Q, c, lam)
         tk, tk1 = (1 + np.sqrt(1 + 4 * tk ** 2)) / 2, tk
         x += alpha * dx
         x, x_prev = x + ((tk1 - 1) / tk) * (x - x_prev), x
+    if debug:
+        return x, normgrads
     return x
